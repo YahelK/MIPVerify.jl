@@ -2,6 +2,7 @@ using JuMP
 using Memento
 using MathOptInterface
 
+
 """
 $(SIGNATURES)
 
@@ -128,7 +129,7 @@ function tight_bound(
     if tightening_algorithm == interval_arithmetic ||
        is_constant(x) ||
        bound_operator[bound_type](b_0, cutoff)
-        return b_0
+       return b_0
     end
     should_relax_integrality = (tightening_algorithm == lp)
     # x is not constant, and thus x must have an associated model
@@ -196,7 +197,7 @@ function relu(x::T, l::Real, u::Real)::JuMP.AffExpr where {T<:JuMPLinearType}
     elseif l >= 0
         # rectified value is always x
         return x
-    else
+    elseif solver_algorithm == exact_mip
         # since we know that u!=l, x is not constant, and thus x must have an associated model
         model = owner_model(x)
         x_rect = @variable(model)
@@ -209,6 +210,37 @@ function relu(x::T, l::Real, u::Real)::JuMP.AffExpr where {T<:JuMPLinearType}
         @constraint(model, x_rect <= u * a)
         @constraint(model, x_rect >= 0)
 
+        # Manually set the bounds for x_rect so they can be used by downstream operations.
+        set_lower_bound(x_rect, 0)
+        set_upper_bound(x_rect, u)
+        return x_rect
+    elseif solver_algorithm == overapprox_deeppoly
+        model = owner_model(x)
+        x_rect = @variable(model)
+
+        # add overaprroximated constraints (deep poly fig. 4(a))
+        @constraint(model, x_rect >= x)
+        @constraint(model, x_rect >= 0)
+        @constraint(model, (x-l)*u/(u-l) >= x_rect)
+        
+        # Manually set the bounds for x_rect so they can be used by downstream operations.
+        set_lower_bound(x_rect, 0)
+        set_upper_bound(x_rect, u)
+        return x_rect
+    else # solver_algorithm == overapprox_mqp
+        model = owner_model(x)
+        x_rect = @variable(model)
+
+        l_b = @variable(model, lower_bound = l, upper_bound = u)
+        u_b =  @variable(model, lower_bound = l, upper_bound = u)
+        @constraint(model, u_b >= x)
+        @constraint(model, x >= l_b)
+
+        # add overaprroximated constraints (deep poly fig. 4(c))
+        @constraint(model, x_rect >= x)
+        @constraint(model, u_b >= x_rect)
+        @constraint(model, (x-l_b)*u_b >= x_rect*(u_b-l_b))
+        
         # Manually set the bounds for x_rect so they can be used by downstream operations.
         set_lower_bound(x_rect, 0)
         set_upper_bound(x_rect, u)

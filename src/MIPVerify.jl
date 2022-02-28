@@ -16,6 +16,10 @@ export find_adversarial_example, frac_correct, interval_arithmetic, lp, mip
 @enum AdversarialExampleObjective closest = 1 worst = 2
 const DEFAULT_TIGHTENING_ALGORITHM = mip
 
+export exact_mip, overapprox_deeppoly, overapprox_mqp
+@enum SolverAlgorithm exact_mip = 1 overapprox_deeppoly = 2 overapprox_mqp = 3
+solver_algorithm = exact_mip
+
 # importing vendor/ConditionalJuMP.jl first as the remaining files use functions
 # defined in it. we're unsure if this is necessary.
 include("vendor/ConditionalJuMP.jl")
@@ -98,15 +102,25 @@ function find_adversarial_example(
     tightening_algorithm::TighteningAlgorithm = DEFAULT_TIGHTENING_ALGORITHM,
     tightening_options::Dict = get_default_tightening_options(optimizer),
     solve_if_predicted_in_targeted = true,
+    global_predicted = -1,
+    global_confidence = 0.0,
+    sa::SolverAlgorithm = exact_mip,
 )::Dict
 
     total_time = @elapsed begin
         d = Dict()
 
+        global solver_algorithm = sa
+        is_global = global_predicted > 0
+        
         # Calculate predicted index
         predicted_output = input |> nn
         num_possible_indexes = length(predicted_output)
-        predicted_index = predicted_output |> get_max_index
+        if is_global
+            predicted_index = global_predicted
+        else
+            predicted_index = predicted_output |> get_max_index
+        end
 
         d[:PredictedIndex] = predicted_index
 
@@ -123,7 +137,13 @@ function find_adversarial_example(
 
         # Only call optimizer if predicted index is not found among target indexes.
         if !(d[:PredictedIndex] in d[:TargetIndexes]) || solve_if_predicted_in_targeted
-            merge!(d, get_model(nn, input, pp, optimizer, tightening_options, tightening_algorithm))
+            
+            if is_global
+                merge!(d, get_model(nn, size(input), global_predicted, global_confidence, d[:TargetIndexes], pp, optimizer, tightening_options, tightening_algorithm))                
+            else # not global
+                merge!(d, get_model(nn, input, pp, optimizer, tightening_options, tightening_algorithm))
+            end
+
             m = d[:Model]
 
             if adversarial_example_objective == closest
